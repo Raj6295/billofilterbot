@@ -20,11 +20,12 @@ API_ID = int(API_ID)
 
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_USERNAME=os.getenv("BOT_USERNAME")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL = os.getenv("LOG_CHANNEL")
 FILES_CHANNEL = os.getenv("FILES_CHANNEL")
 
-if not all([API_HASH, BOT_TOKEN, MONGO_URI, LOG_CHANNEL, FILES_CHANNEL]):
+if not all([API_HASH, BOT_TOKEN, BOT_USERNAME, MONGO_URI, LOG_CHANNEL, FILES_CHANNEL]):
     raise ValueError("❌ One or more environment variables are missing in .env or Render.")
 
 LOG_CHANNEL = int(LOG_CHANNEL)
