@@ -3,6 +3,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 from config import Config
+from bson.objectid import ObjectId
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -27,12 +28,12 @@ async def index_files(client, message):
     file_id = message.document.file_id if message.document else message.video.file_id
     file_name = message.document.file_name if message.document else message.video.file_name
 
-    files_col.update_one(
-        {"file_id": file_id},
-        {"$set": {"file_name": file_name, "file_id": file_id}},
-        upsert=True
-    )
-    logger.info(f"Indexed file: {file_name}")
+    existing = files_col.find_one({"file_id": file_id})
+    if not existing:
+        files_col.insert_one({"file_name": file_name, "file_id": file_id})
+        logger.info(f"Indexed file: {file_name}")
+    else:
+        logger.info(f"File already indexed: {file_name}")
 
 # ----------------- Start Command -----------------
 @bot.on_message(filters.command("start"))
@@ -67,7 +68,7 @@ async def search_files(client, message):
         return
 
     buttons = [
-        [InlineKeyboardButton(f["file_name"], callback_data=f['file_id'])]
+        [InlineKeyboardButton(f["file_name"], callback_data=str(f["_id"]))]
         for f in results
     ]
     await message.reply_text(
@@ -78,12 +79,12 @@ async def search_files(client, message):
 # ----------------- Send File -----------------
 @bot.on_callback_query()
 async def send_file(client, callback_query):
-    file_id = callback_query.data
-    file = files_col.find_one({"file_id": file_id})
+    doc_id = callback_query.data
+    file = files_col.find_one({"_id": ObjectId(doc_id)})
 
     if file:
         await callback_query.message.reply_document(
-            file_id, caption=f"🎬 {file['file_name']}"
+            file["file_id"], caption=f"🎬 {file['file_name']}"
         )
     await callback_query.answer()
 
