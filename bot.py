@@ -37,7 +37,7 @@ files_collection = db["files"]
 # ----------------------- FILE SENDER -----------------------
 async def send_file(client, message, file):
     file_id = file.get("file_id")
-    file_type = file.get("file_type", "document")  # default if missing
+    file_type = file.get("file_type", "document")  # default to document
     caption = file.get("caption", "")
 
     try:
@@ -61,13 +61,18 @@ async def send_file(client, message, file):
 # ----------------------- SEARCH HANDLER -----------------------
 @bot.on_message(filters.private & filters.text)
 async def search_handler(client, message):
-    query = message.text.strip()
+    # Prevent replying to itself
+    if message.from_user.is_bot:
+        return
 
+    query = message.text.strip()
     if not query:
         return await message.reply("❌ Please provide a search term.")
 
     try:
-        files_cursor = files_collection.find({"file_name": {"$regex": query, "$options": "i"}})
+        files_cursor = files_collection.find(
+            {"file_name": {"$regex": query, "$options": "i"}}
+        )
         files = await files_cursor.to_list(length=5)
 
         if not files:
@@ -85,7 +90,7 @@ async def search_handler(client, message):
 @bot.on_message(filters.command("start"))
 async def start_handler(client, message):
     await message.reply(
-        "👋 Hello! I am your Movie AutoFilter Bot.\n\n"
+        "👋 Hello! I am your **Movie AutoFilter Bot**.\n\n"
         "🔍 Send me a movie name and I’ll fetch it for you!"
     )
 
