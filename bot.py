@@ -12,15 +12,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load from environment
-API_ID = int(os.getenv("API_ID"))
+# ----------------------- ENV VARIABLES -----------------------
+API_ID = os.getenv("API_ID")
+if not API_ID:
+    raise ValueError("❌ API_ID is missing. Please set it in your environment variables.")
+API_ID = int(API_ID)
+
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
-LOG_CHANNEL = int(os.getenv("LOG_CHANNEL"))
-FILES_CHANNEL = int(os.getenv("FILES_CHANNEL"))
+LOG_CHANNEL = os.getenv("LOG_CHANNEL")
+FILES_CHANNEL = os.getenv("FILES_CHANNEL")
 
-# Initialize bot
+if not all([API_HASH, BOT_TOKEN, MONGO_URI, LOG_CHANNEL, FILES_CHANNEL]):
+    raise ValueError("❌ One or more environment variables are missing in .env or Render.")
+
+LOG_CHANNEL = int(LOG_CHANNEL)
+FILES_CHANNEL = int(FILES_CHANNEL)
+
+# ----------------------- BOT INIT -----------------------
 bot = Client(
     "MovieAutoFilterBot",
     api_id=API_ID,
@@ -28,7 +38,7 @@ bot = Client(
     bot_token=BOT_TOKEN,
 )
 
-# Database setup
+# ----------------------- MONGO SETUP -----------------------
 mongo_client = AsyncIOMotorClient(MONGO_URI)
 db = mongo_client["autofilter"]
 files_collection = db["files"]
@@ -89,6 +99,8 @@ async def search_handler(client, message):
 # ----------------------- START HANDLER -----------------------
 @bot.on_message(filters.command("start"))
 async def start_handler(client, message):
+    if message.from_user.is_bot:
+        return
     await message.reply(
         "👋 Hello! I am your **Movie AutoFilter Bot**.\n\n"
         "🔍 Send me a movie name and I’ll fetch it for you!"
