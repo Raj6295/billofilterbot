@@ -25,15 +25,21 @@ bot = Client(
 # ----------------- Index Files -----------------
 @bot.on_message(filters.chat(Config.FILES_CHANNEL) & (filters.document | filters.video))
 async def index_files(client, message):
-    file_id = message.document.file_id if message.document else message.video.file_id
-    file_name = message.document.file_name if message.document else message.video.file_name
-
-    existing = files_col.find_one({"file_id": file_id})
-    if not existing:
-        files_col.insert_one({"file_name": file_name, "file_id": file_id})
-        logger.info(f"Indexed file: {file_name}")
+    if message.document:
+        file_id = message.document.file_id
+        file_name = message.document.file_name
+        file_type = "document"
     else:
-        logger.info(f"File already indexed: {file_name}")
+        file_id = message.video.file_id
+        file_name = message.video.file_name or "Video"
+        file_type = "video"
+
+    files_col.update_one(
+        {"file_id": file_id},
+        {"$set": {"file_name": file_name, "file_id": file_id, "file_type": file_type}},
+        upsert=True
+    )
+    logger.info(f"Indexed {file_type}: {file_name}")
 
 # ----------------- Start Command -----------------
 @bot.on_message(filters.command("start"))
@@ -42,7 +48,7 @@ async def start(client, message):
         "👋 Hello! I am a Movie Auto Filter Bot.\n\n"
         "Send me a movie name and I’ll fetch it for you 🎬",
         reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Support", url="https://t.me/YourSupportGroup")]]
+            [[InlineKeyboardButton("Support", url="https://t.me/billo_movies")]]
         ),
     )
 
@@ -82,10 +88,21 @@ async def send_file(client, callback_query):
     doc_id = callback_query.data
     file = files_col.find_one({"_id": ObjectId(doc_id)})
 
-    if file:
+    if not file:
+        await callback_query.answer("❌ File not found in database.", show_alert=True)
+        return
+
+    if file["file_type"] == "document":
         await callback_query.message.reply_document(
             file["file_id"], caption=f"🎬 {file['file_name']}"
         )
+    elif file["file_type"] == "video":
+        await callback_query.message.reply_video(
+            file["file_id"], caption=f"🎬 {file['file_name']}"
+        )
+    else:
+        await callback_query.message.reply_text(f"⚠️ Unknown file type: {file['file_name']}")
+
     await callback_query.answer()
 
 # ----------------- Run Bot -----------------
