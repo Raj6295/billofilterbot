@@ -1,109 +1,96 @@
+import os
+import asyncio
 import logging
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pymongo import MongoClient
-from config import Config
-from bson.objectid import ObjectId
+from motor.motor_asyncio import AsyncIOMotorClient
+from pyrogram.errors import FloodWait, RPCError
 
-# Logging
-logging.basicConfig(level=logging.INFO)
+# Enable logging
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 logger = logging.getLogger(__name__)
 
-# MongoDB
-mongo_client = MongoClient(Config.MONGO_DB_URI)
-db = mongo_client["autofilter"]
-files_col = db["files"]
+# Load from environment
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URI = os.getenv("MONGO_URI")
+LOG_CHANNEL = int(os.getenv("LOG_CHANNEL"))
+FILES_CHANNEL = int(os.getenv("FILES_CHANNEL"))
 
-# Pyrogram Client
+# Initialize bot
 bot = Client(
     "MovieAutoFilterBot",
-    api_id=Config.API_ID,
-    api_hash=Config.API_HASH,
-    bot_token=Config.BOT_TOKEN,
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
 )
 
-# ----------------- Index Files -----------------
-@bot.on_message(filters.chat(Config.FILES_CHANNEL) & (filters.document | filters.video))
-async def index_files(client, message):
-    if message.document:
-        file_id = message.document.file_id
-        file_name = message.document.file_name
-        file_type = "document"
-    else:
-        file_id = message.video.file_id
-        file_name = message.video.file_name or "Video"
-        file_type = "video"
+# Database setup
+mongo_client = AsyncIOMotorClient(MONGO_URI)
+db = mongo_client["autofilter"]
+files_collection = db["files"]
 
-    files_col.update_one(
-        {"file_id": file_id},
-        {"$set": {"file_name": file_name, "file_id": file_id, "file_type": file_type}},
-        upsert=True
-    )
-    logger.info(f"Indexed {file_type}: {file_name}")
 
-# ----------------- Start Command -----------------
-@bot.on_message(filters.command("start"))
-async def start(client, message):
-    await message.reply_text(
-        "👋 Hello! I am a Movie Auto Filter Bot.\n\n"
-        "Send me a movie name and I’ll fetch it for you 🎬",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Support", url="https://t.me/billo_movies")]]
-        ),
-    )
+# ----------------------- FILE SENDER -----------------------
+async def send_file(client, message, file):
+    file_id = file.get("file_id")
+    file_type = file.get("file_type", "document")  # default if missing
+    caption = file.get("caption", "")
 
-# ----------------- Help Command -----------------
-@bot.on_message(filters.command("help"))
-async def help_cmd(client, message):
-    await message.reply_text("📌 Send me a movie name and I’ll search from my database!")
+    try:
+        if file_type == "document":
+            await client.send_document(message.chat.id, file_id, caption=caption)
+        elif file_type == "video":
+            await client.send_video(message.chat.id, file_id, caption=caption)
+        elif file_type == "photo":
+            await client.send_photo(message.chat.id, file_id, caption=caption)
+        else:
+            await message.reply("⚠️ Unsupported file type.")
+    except FloodWait as e:
+        logger.warning(f"FloodWait: Sleeping for {e.value} seconds")
+        await asyncio.sleep(e.value)
+        return await send_file(client, message, file)
+    except RPCError as e:
+        logger.error(f"RPC Error while sending file: {e}")
+        await message.reply(f"❌ Error: {e}")
 
-# ----------------- Stats Command -----------------
-@bot.on_message(filters.command("stats"))
-async def stats(client, message):
-    total_files = files_col.count_documents({})
-    await message.reply_text(f"📊 Total files indexed: {total_files}")
 
-# ----------------- Search Handler -----------------
-@bot.on_message(filters.text & ~filters.command(["start", "help", "stats"]))
-async def search_files(client, message):
+# ----------------------- SEARCH HANDLER -----------------------
+@bot.on_message(filters.private & filters.text)
+async def search_handler(client, message):
     query = message.text.strip()
-    results = list(files_col.find({"file_name": {"$regex": query, "$options": "i"}}).limit(20))
 
-    if not results:
-        await message.reply_text("❌ No results found.")
-        return
+    if not query:
+        return await message.reply("❌ Please provide a search term.")
 
-    buttons = [
-        [InlineKeyboardButton(f["file_name"], callback_data=str(f["_id"]))]
-        for f in results
-    ]
-    await message.reply_text(
-        f"🔎 Results for **{query}**:",
-        reply_markup=InlineKeyboardMarkup(buttons)
+    try:
+        files_cursor = files_collection.find({"file_name": {"$regex": query, "$options": "i"}})
+        files = await files_cursor.to_list(length=5)
+
+        if not files:
+            return await message.reply("⚠️ No results found.")
+
+        for file in files:
+            await send_file(client, message, file)
+            await asyncio.sleep(1)  # prevent flood
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        await message.reply("❌ Something went wrong while searching.")
+
+
+# ----------------------- START HANDLER -----------------------
+@bot.on_message(filters.command("start"))
+async def start_handler(client, message):
+    await message.reply(
+        "👋 Hello! I am your Movie AutoFilter Bot.\n\n"
+        "🔍 Send me a movie name and I’ll fetch it for you!"
     )
 
-# ----------------- Send File -----------------
-@bot.on_callback_query()
-async def send_file(client, callback_query):
-    doc_id = callback_query.data
-    file = files_col.find_one({"_id": ObjectId(doc_id)})
 
-    if not file:
-        await callback_query.answer("❌ File not found in database.", show_alert=True)
-        return
-
-    if file["file_type"] == "document":
-        await callback_query.message.reply_document(
-            file["file_id"], caption=f"🎬 {file['file_name']}"
-        )
-    elif file["file_type"] == "video":
-        await callback_query.message.reply_video(
-            file["file_id"], caption=f"🎬 {file['file_name']}"
-        )
-    else:
-        await callback_query.message.reply_text(f"⚠️ Unknown file type: {file['file_name']}")
-
-    await callback_query.answer()
-
-# ----------------- Run Bot -----------------
-bot.run()
+# ----------------------- MAIN -----------------------
+if __name__ == "__main__":
+    logger.info("🚀 Bot is starting...")
+    bot.run()
